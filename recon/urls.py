@@ -15,6 +15,7 @@ router.register(r"raw_sap", RawSapViewSet)
 router.register(r"raw_mt940", RawMt940ViewSet)
 
 urlpatterns = [
+    path("", include(router.urls)),  
     path("upload/", FileUploadView.as_view(), name="upload-file"),
     path("auto_recon/", SomeAPI.as_view(), name="recon"),
     path(
