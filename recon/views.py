@@ -28,14 +28,9 @@ class FileUploadView(APIView):
         mt940_file = request.FILES["mt940_file"]
         sap_file = request.FILES["sap_file"]
 
-        # Save the files temporarily
-        fs = FileSystemStorage()
-        mt940_file_path = fs.save(mt940_file.name, mt940_file)
-        sap_file_path = fs.save(sap_file.name, sap_file)
-
         # Process the files
-        read_mt940_csv(fs.url(mt940_file_path))
-        read_sap_csv(fs.url(sap_file_path))
+        read_mt940_csv(mt940_file)
+        read_sap_csv(sap_file)
 
         return JsonResponse({"message": "Files processed successfully"})
 
@@ -438,7 +433,7 @@ class ManualReconView(APIView):
 
             return Response(
                 {"message": "Manual reconciliation successful."},
-                status=status.HTTP_201_CREATED,
+                status=status.status.HTTP_201_CREATED,
             )
 
         except RawSapPayment.DoesNotExist:

@@ -18,11 +18,15 @@ def parse_date(date_str):
 
 def read_mt940_csv(file):
     """Reads MT940 data from a file-like object and inserts it into the database."""
-    reader = csv.DictReader(file)  # Read CSV as dictionary (column names as keys)
+
+    reader = csv.DictReader(
+        file.read().decode("ascii").splitlines()
+    )  # Read CSV as dictionary (column names as keys)
 
     transactions = []  # Store objects for bulk insert
 
     for row in reader:
+        print(row)
         try:
             transaction = RawMt940Transaction(
                 transaction_id=row["Transaction_ID"],
@@ -55,11 +59,13 @@ def read_mt940_csv(file):
 
 def read_sap_csv(file):
     """Reads SAP payment data from a file-like object and inserts it into the database."""
-    reader = csv.DictReader(file)  # Read CSV as dictionary (column names as keys)
+
+    reader = csv.DictReader(file.read().decode("ascii").splitlines())
 
     payments = []  # Store objects for bulk insert
 
     for row in reader:
+        print(row)
         try:
             payment = RawSapPayment(
                 document_number=row["Document_Number"],
