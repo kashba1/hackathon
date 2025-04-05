@@ -91,13 +91,3 @@ class ManualReconResult(models.Model):
 
     class Meta:
         db_table = "manual_recon_result"
-
-    def clean(self):
-        if not (0 <= self.error_percentage_approval <= 100):
-            raise ValidationError(
-                "Error percentage approval must be between 0 and 100."
-            )
-
-    def save(self, *args, **kwargs):
-        self.clean()
-        super().save(*args, **kwargs)
