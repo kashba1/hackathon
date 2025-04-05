@@ -46,10 +46,12 @@ class SomeAPI(APIView):
             )
 
         # Process the data and get results
-        results = self.process_data(sap_payment_df, mt940_df)
+        results, summary = self.process_data(sap_payment_df, mt940_df)
 
         try:
-            return Response({"result": results}, status=status.HTTP_200_OK)
+            return Response(
+                {"result": results, "summary": summary}, status=status.HTTP_200_OK
+            )
         except ValueError as e:
             print(f"JSON serialization error: {e}")
             return Response(
@@ -72,6 +74,15 @@ class SomeAPI(APIView):
     def process_data(self, sap_payment_df, mt940_df):
         """Process the SAP payment data against MT940 data."""
         results = []
+        summary = {
+            "mismatches": 0,
+            "partial_matches": 0,
+            "missing_transactions": 0,
+            "full_matches": 0,
+            "manually_reconned": 0,
+            "manually_overridden": 0,
+        }
+
         fields_to_check = {
             "posting_dt": "posting_dt",
             "currency": "currency",
@@ -90,6 +101,7 @@ class SomeAPI(APIView):
 
             # Check if the transaction is manually overridden
             if self.is_manually_user_overridden(document_number):
+                summary["manually_overridden"] += 1
                 result = {
                     "Transaction_ID": document_number,
                     "Status": "Manual override",
@@ -103,6 +115,7 @@ class SomeAPI(APIView):
                 sap_document_num__id=sap_row["id"]  # Use the ID of the SAP document
             )
             if manual_recon_records.exists():
+                summary["manually_reconned"] += 1
                 mt_transaction_ids = list(
                     manual_recon_records.values_list(
                         "mt_transaction_id__transaction_id", flat=True
@@ -128,6 +141,7 @@ class SomeAPI(APIView):
             result = {"Transaction_ID": document_number}
 
             if matching_mt_row.empty:
+                summary["missing_transactions"] += 1
                 result = self.handle_missing_transaction(sap_row, document_number)
             else:
                 mt_row = matching_mt_row.iloc[0]
@@ -135,9 +149,16 @@ class SomeAPI(APIView):
                     sap_row, mt_row, fields_to_check, document_number
                 )
 
+            if result["Status"] == "Mismatch":
+                summary["mismatches"] += 1
+            elif result["Status"] == "Partial match":
+                summary["partial_matches"] += 1
+            elif result["Status"] == "Full match":
+                summary["full_matches"] += 1
+
             results.append(result)
 
-        return results
+        return results, summary
 
     def is_manually_user_overridden(self, document_number):
         try:
@@ -270,9 +291,7 @@ class SomeAPI(APIView):
         column_details=None,
     ):
         """Save or update the result in the database."""
-        status_data = {
-            "Column_Details": column_details,
-        }
+        status_data = {"Column_Details": column_details}
         if mismatched_columns:
             status_data["Mismatched_Columns"] = mismatched_columns
         if partially_missing_columns:
@@ -305,56 +324,59 @@ class SomeAPI(APIView):
 
 class MarkManualView(APIView):
     def post(self, request):
-        id_post = request.data.get(
-            "id"
-        )  # Get the document number from the request data
+        ids_post = request.data.get(
+            "ids"
+        )  # Get the list of document IDs from the request data
 
-        if not id_post:
+        if not ids_post or not isinstance(ids_post, list):
             return Response(
-                {"error": "id is required."},
+                {"error": "A list of IDs is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            # Get the RawSapPayment object for the given document_number
-            sap_payment = RawSapPayment.objects.get(id=id_post)
+        success_count = 0
+        error_messages = []
 
-            # Get the AutoReconResult object associated with the sap_payment
-            auto_recon_result = AutoReconResult.objects.get(
-                sap_document_num=sap_payment
-            )
+        for id_post in ids_post:
+            try:
+                # Get the RawSapPayment object for the given document_number
+                sap_payment = RawSapPayment.objects.get(id=id_post)
 
-            # Check if the status is not "Full match"
-            if auto_recon_result.status != AutoReconResult.FULL_MATCH:
-                # Update the is_manual_override flag to True
-                auto_recon_result.is_manual_override = True
-                auto_recon_result.approve_user = "ADMIN"
-                auto_recon_result.save()  # Save the changes
-
-                return Response(
-                    {"message": "Manual override marked successfully."},
-                    status=status.HTTP_200_OK,
-                )
-            else:
-                return Response(
-                    {"error": "Cannot mark manual override for a full match."},
-                    status=status.HTTP_400_BAD_REQUEST,
+                # Get the AutoReconResult object associated with the sap_payment
+                auto_recon_result = AutoReconResult.objects.get(
+                    sap_document_num=sap_payment
                 )
 
-        except RawSapPayment.DoesNotExist:
-            return Response(
-                {"error": "RawSapPayment with the given ID does not exist."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        except AutoReconResult.DoesNotExist:
-            return Response(
-                {"error": "AutoReconResult does not exist for the given SAP record."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        except Exception as e:
-            return Response(
-                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+                # Check if the status is not "Full match"
+                if auto_recon_result.status != AutoReconResult.FULL_MATCH:
+                    # Update the is_manual_override flag to True
+                    auto_recon_result.is_manual_override = True
+                    auto_recon_result.approve_user = "ADMIN"
+                    auto_recon_result.save()  # Save the changes
+                    success_count += 1
+                else:
+                    error_messages.append(
+                        f"Cannot mark manual override for a full match for ID {id_post}."
+                    )
+
+            except RawSapPayment.DoesNotExist:
+                error_messages.append(
+                    f"RawSapPayment with ID {id_post} does not exist."
+                )
+            except AutoReconResult.DoesNotExist:
+                error_messages.append(
+                    f"AutoReconResult does not exist for the SAP record with ID {id_post}."
+                )
+            except Exception as e:
+                error_messages.append(f"Error processing ID {id_post}: {str(e)}")
+
+        # Prepare the response summary
+        response_data = {
+            "success_count": success_count,
+            "error_messages": error_messages,
+        }
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 class ManualReconView(APIView):
