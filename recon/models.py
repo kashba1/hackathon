@@ -1,5 +1,6 @@
 from django.db import models
 from django.db.models import JSONField
+from django.forms import ValidationError
 
 
 class RawSapPayment(models.Model):
@@ -18,6 +19,7 @@ class RawSapPayment(models.Model):
     payment_term = models.CharField(max_length=255)
     insert_tmst = models.DateTimeField(auto_now_add=True)
     row_hash = models.CharField(max_length=255, unique=True)
+    is_manually_reconned = models.BooleanField(default=False)
 
     class Meta:
         db_table = "raw_sap_payments"
@@ -35,6 +37,7 @@ class RawMt940Transaction(models.Model):
     bank_account = models.CharField(max_length=255)
     insert_tmst = models.DateTimeField(auto_now_add=True)
     row_hash = models.CharField(max_length=255, unique=True)
+    is_manually_reconned = models.BooleanField(default=False)
 
     class Meta:
         db_table = "raw_mt940_transactions"
@@ -88,3 +91,13 @@ class ManualReconResult(models.Model):
 
     class Meta:
         db_table = "manual_recon_result"
+
+    def clean(self):
+        if not (0 <= self.error_percentage_approval <= 100):
+            raise ValidationError(
+                "Error percentage approval must be between 0 and 100."
+            )
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)

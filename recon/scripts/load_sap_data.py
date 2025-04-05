@@ -13,7 +13,7 @@ def parse_date(date_str):
         return None  # Return None if the date is invalid
 
 
-def read_sap_csv(file_path):
+def xyz(file_path):
     """Reads SAP payment data from CSV and inserts it into the database."""
     with open(file_path, mode="r", newline="", encoding="ascii") as csvfile:
         reader = csv.DictReader(

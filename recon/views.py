@@ -1,10 +1,14 @@
+from django.http import JsonResponse
 import pandas as pd
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework import viewsets
+from django.core.files.storage import FileSystemStorage
 
-from recon.serializers import AutoReconSerializer
+from recon.scripts.load_mt940_data import read_mt940_csv
+from recon.scripts.load_mt940_data import read_sap_csv
+from recon.serializers import AutoReconSerializer, RawMt940serializer, RawSapSerializer
 from .models import (
     ManualReconResult,
     RawSapPayment,
@@ -13,6 +17,27 @@ from .models import (
 )
 import numpy as np  # Import numpy to check for NaN and infinite values
 from datetime import date, datetime  # Explicitly import date and datetime
+
+
+class FileUploadView(APIView):
+    def post(self, request):
+        # Check if files are in the request
+        if "mt940_file" not in request.FILES or "sap_file" not in request.FILES:
+            return JsonResponse({"error": "No files provided"}, status=400)
+
+        mt940_file = request.FILES["mt940_file"]
+        sap_file = request.FILES["sap_file"]
+
+        # Save the files temporarily
+        fs = FileSystemStorage()
+        mt940_file_path = fs.save(mt940_file.name, mt940_file)
+        sap_file_path = fs.save(sap_file.name, sap_file)
+
+        # Process the files
+        read_mt940_csv(fs.url(mt940_file_path))
+        read_sap_csv(fs.url(sap_file_path))
+
+        return JsonResponse({"message": "Files processed successfully"})
 
 
 class SomeAPI(APIView):
@@ -385,17 +410,26 @@ class ManualReconView(APIView):
                         mt_record.amount
                     )  # Assuming amount is a field in RawMt940Transaction
 
+            error_percentage = request.data.get("error_percentage")
             # Check if the total amount matches
-            if abs(total_mt_amount) != abs(sap_record.amount):
+            if abs(total_mt_amount) < sap_record.amount - (
+                error_percentage * sap_record.amount / 100
+            ) or abs(total_mt_amount) > sap_record.amount + (
+                error_percentage * sap_record.amount / 100
+            ):
                 return Response(
                     {
                         "error": "Total amount of MT940 records does not match SAP record amount."
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-
+            # Flag value of is_manual_reconned set to true
+            sap_record.is_manually_reconned = True
+            sap_record.save()
             # If all conditions are met, create ManualReconResult entries
             for mt_record in mt_records:
+                mt_record.is_manually_reconned = True
+                mt_record.save()
                 ManualReconResult.objects.create(
                     sap_document_num=sap_record,
                     mt_transaction_id=mt_record,
@@ -417,3 +451,15 @@ class ManualReconView(APIView):
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class RawSapViewSet(viewsets.ModelViewSet):
+    queryset = RawSapPayment.objects.all()
+    serializer_class = RawSapSerializer
+    filterset_fields = ["is_manually_reconned"]
+
+
+class RawMt940ViewSet(viewsets.ModelViewSet):
+    queryset = RawMt940Transaction.objects.all()
+    serializer_class = RawMt940serializer
+    filterset_fields = ["is_manually_reconned"]
